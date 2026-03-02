@@ -1,0 +1,14 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="Quick recipe placeholder">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ddf3e9"/>
+      <stop offset="100%" stop-color="#ffefcc"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <circle cx="220" cy="140" r="70" fill="#57bc97" fill-opacity="0.25"/>
+  <circle cx="1040" cy="480" r="110" fill="#f2a100" fill-opacity="0.2"/>
+  <rect x="290" y="190" width="620" height="250" rx="28" fill="#ffffff" fill-opacity="0.85"/>
+  <text x="600" y="300" text-anchor="middle" font-family="Assistant, sans-serif" font-size="54" font-weight="700" fill="#1d5142">Quick &amp; Minimal</text>
+  <text x="600" y="360" text-anchor="middle" font-family="Assistant, sans-serif" font-size="52" font-weight="700" fill="#194337">Recipes</text>
+</svg>
