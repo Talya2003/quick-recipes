@@ -4,6 +4,7 @@ import { Assistant, Rubik } from "next/font/google";
 import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
 import { PageViewTracker } from "@/components/PageViewTracker";
+import { AIRecipeButton } from "@/components/AIRecipeButton";
 import "../src/styles/globals.css";
 
 const rubik = Rubik({
@@ -45,12 +46,15 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="he" dir="rtl">
-      <body className={`${rubik.variable} ${assistant.variable} min-h-screen bg-zinc-50 font-[var(--font-assistant)] text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100`}>
+      <body
+        className={`${rubik.variable} ${assistant.variable} min-h-screen bg-zinc-50 font-[var(--font-assistant)] text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100`}
+      >
         <Suspense fallback={null}>
           <PageViewTracker />
         </Suspense>
         <Header />
         <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8">{children}</main>
+        <AIRecipeButton />
         <Footer />
       </body>
     </html>
