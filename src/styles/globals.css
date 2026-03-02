@@ -1,0 +1,28 @@
+﻿@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-feature-settings: "kern" 1, "liga" 1;
+  background:
+    radial-gradient(circle at 10% -20%, rgba(47, 159, 123, 0.15), transparent 40%),
+    radial-gradient(circle at 90% 0%, rgba(242, 161, 0, 0.13), transparent 35%);
+}
+
+::selection {
+  background: rgba(47, 159, 123, 0.25);
+}
