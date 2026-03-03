@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AIRecipeResult } from "@/components/AIRecipeResult";
+import { extractMinutes, parseAIRecipe, SUBMIT_RECIPE_DRAFT_KEY, type SubmitRecipeDraft } from "@/lib/aiRecipe";
 import { track } from "@/lib/track";
 
 const mealTypeOptions = ["", "בוקר", "צהריים", "ערב", "קינוח"] as const;
@@ -26,12 +28,14 @@ function parseIngredients(input: string): string[] {
 }
 
 export function AIRecipeModal({ open, onClose }: AIRecipeModalProps) {
+  const router = useRouter();
   const [ingredientsText, setIngredientsText] = useState("");
   const [mealType, setMealType] = useState<string>("");
   const [maxMinutes, setMaxMinutes] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recipe, setRecipe] = useState<string | null>(null);
+  const [addDraftSuccess, setAddDraftSuccess] = useState<string | null>(null);
 
   const ingredients = useMemo(() => parseIngredients(ingredientsText), [ingredientsText]);
 
@@ -64,6 +68,7 @@ export function AIRecipeModal({ open, onClose }: AIRecipeModalProps) {
   const generateRecipe = async () => {
     setError(null);
     setRecipe(null);
+    setAddDraftSuccess(null);
 
     if (!validateInput()) return;
 
@@ -98,6 +103,29 @@ export function AIRecipeModal({ open, onClose }: AIRecipeModalProps) {
     } finally {
       setLoading(false);
     }
+  };
+
+  const addRecipeToSite = () => {
+    if (!recipe) return;
+
+    const parsed = parseAIRecipe(recipe);
+    const fallbackIngredients = ingredients.map((item) => `${item} - לפי הצורך`);
+    const draft: SubmitRecipeDraft = {
+      name: parsed.title || "מתכון AI",
+      minutes: extractMinutes(parsed.prepTime, maxMinutes.trim() || "10"),
+      ingredients: (parsed.ingredients.length ? parsed.ingredients : fallbackIngredients).join("\n"),
+      steps: parsed.steps.join("\n"),
+      tags: [mealType || "", "AI"].filter(Boolean).join(", ")
+    };
+
+    localStorage.setItem(SUBMIT_RECIPE_DRAFT_KEY, JSON.stringify(draft));
+    setAddDraftSuccess("הטיוטה נשמרה. מעבירה לעמוד שליחת מתכון...");
+    track("submit_intent", { source: "ai_recipe", name: draft.name, minutes: draft.minutes });
+
+    window.setTimeout(() => {
+      onClose();
+      router.push("/submit");
+    }, 450);
   };
 
   if (!open) return null;
@@ -177,13 +205,19 @@ export function AIRecipeModal({ open, onClose }: AIRecipeModalProps) {
             </button>
             <button
               type="button"
-              disabled
-              className="rounded-xl border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-500 dark:border-zinc-700 dark:text-zinc-400"
-              title="בקרוב"
+              onClick={addRecipeToSite}
+              disabled={!recipe || loading}
+              className="rounded-xl border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
             >
               הוסיפי כמתכון לאתר
             </button>
           </div>
+
+          {addDraftSuccess && (
+            <div className="rounded-xl border border-brand-200 bg-brand-50 px-3 py-2 text-sm text-brand-800 dark:border-brand-900 dark:bg-brand-950/40 dark:text-brand-200">
+              {addDraftSuccess}
+            </div>
+          )}
 
           {error && (
             <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200">
