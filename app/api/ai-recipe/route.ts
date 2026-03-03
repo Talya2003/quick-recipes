@@ -12,6 +12,8 @@ const LEGACY_BASE_URL = "https://api-inference.huggingface.co/models";
 const ROUTER_CHAT_URL = "https://router.huggingface.co/v1/chat/completions";
 const REQUEST_TIMEOUT_MS = 30000;
 const MAX_RETRIES = 3;
+const MAX_REFINEMENT_ATTEMPTS = 1;
+const MIN_QUALITY_SCORE = 8;
 const ALLOWED_MEAL_TYPES = new Set(["בוקר", "צהריים", "ערב", "קינוח"]);
 const PANTRY_ITEMS = ["מלח", "פלפל", "שמן", "מים"];
 
@@ -22,8 +24,33 @@ type AiRecipeRequestBody = {
 };
 
 type GenerationResult =
-  | { ok: true; recipe: string; model: string; source: "legacy" | "router" }
+  | {
+      ok: true;
+      recipe: string;
+      model: string;
+      source: "legacy" | "router" | "fallback";
+      qualityScore: number;
+      grounded: boolean;
+      fluent: boolean;
+    }
   | { ok: false; status: number; error: string; details?: string };
+
+type RecipeCandidate = {
+  recipe: string;
+  model: string;
+  score: number;
+  grounded: boolean;
+  fluent: boolean;
+  qualityScore: number;
+};
+
+type ParsedRecipe = {
+  title: string;
+  prepTime: string;
+  difficulty: string;
+  ingredients: string[];
+  steps: string[];
+};
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -70,12 +97,13 @@ function normalizeMaxMinutes(raw: unknown): number | undefined {
 
 function buildUserPrompt(ingredients: string[], mealType?: string, maxMinutes?: number): string {
   return [
-    "צרי מתכון בעברית לפי המצרכים הבאים בלבד:",
+    "צרי מתכון בעברית תקינה ורציפה בלבד לפי המצרכים הבאים בלבד:",
     ingredients.map((item) => `- ${item}`).join("\n"),
     mealType ? `סוג הארוחה המבוקש: ${mealType}` : "סוג הארוחה המבוקש: לבחירתך",
     maxMinutes ? `זמן הכנה מקסימלי רצוי: ${maxMinutes} דקות` : "זמן הכנה מקסימלי רצוי: לא צוין",
     "",
     "השתמשי רק במצרכים שסופקו + פריטי מזווה בסיסיים בלבד (מלח, פלפל, שמן, מים).",
+    "אסור להשתמש באותיות לטיניות בכלל.",
     "אל תוסיפי רכיבים אחרים.",
     "",
     "החזירי את התשובה בדיוק בפורמט הזה:",
@@ -98,6 +126,8 @@ function buildUserPrompt(ingredients: string[], mealType?: string, maxMinutes?: 
 function getSystemPrompt(): string {
   return [
     "You are a professional chef.",
+    "Write fluent, natural Hebrew only.",
+    "Never use Latin letters, transliteration, or mixed scripts.",
     "Only generate realistic recipes using the provided ingredients.",
     "You may add only basic pantry items: salt, pepper, oil, water.",
     "Quantities must be reasonable.",
@@ -110,6 +140,13 @@ function getSystemPrompt(): string {
 function normalizeModelOutput(rawText: string): string {
   let text = rawText.trim();
   text = text.replace(/```(?:text)?/gi, "").replace(/```/g, "").trim();
+  text = text.replace(/\r/g, "");
+  text = text.replace(/\s*(זמן הכנה:)/g, "\n$1");
+  text = text.replace(/\s*(רמת קושי:)/g, "\n$1");
+  text = text.replace(/\s*(רשימת מצרכים עם כמויות:)/g, "\n\n$1");
+  text = text.replace(/\s*(אופן ההכנה:)/g, "\n\n$1");
+  text = text.replace(/\s*(טיפים(?:\s*\(אופציונלי\))?:)/g, "\n\n$1");
+  text = text.replace(/\n{3,}/g, "\n\n").trim();
 
   const startIndex = text.indexOf("שם המתכון:");
   if (startIndex > 0) {
@@ -117,6 +154,102 @@ function normalizeModelOutput(rawText: string): string {
   }
 
   return text;
+}
+
+function cleanListLine(line: string): string {
+  return line.replace(/^[-*•]\s*/, "").replace(/^\d+[\).\s-]*/, "").trim();
+}
+
+function isSectionHeader(line: string): boolean {
+  return (
+    line.startsWith("שם המתכון:") ||
+    line.startsWith("זמן הכנה:") ||
+    line.startsWith("רמת קושי:") ||
+    line.startsWith("רשימת מצרכים") ||
+    line.startsWith("מצרכים:") ||
+    line.startsWith("אופן ההכנה:") ||
+    line.startsWith("אופן הכנה:") ||
+    line.startsWith("טיפים")
+  );
+}
+
+function parseRecipeStructure(recipe: string): ParsedRecipe {
+  const lines = normalizeModelOutput(recipe)
+    .split("\n")
+    .map((line) => line.trim());
+
+  let title = "";
+  let prepTime = "";
+  let difficulty = "";
+  const ingredients: string[] = [];
+  const steps: string[] = [];
+  let section: "ingredients" | "steps" | null = null;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!line) continue;
+
+    if (line.startsWith("שם המתכון:")) {
+      const value = line.replace("שם המתכון:", "").trim();
+      if (value) {
+        title = value;
+      } else if (lines[i + 1] && !isSectionHeader(lines[i + 1])) {
+        title = lines[i + 1].trim();
+      }
+      section = null;
+      continue;
+    }
+
+    if (line.startsWith("זמן הכנה:")) {
+      const value = line.replace("זמן הכנה:", "").trim();
+      if (value) {
+        prepTime = value;
+      } else if (lines[i + 1] && !isSectionHeader(lines[i + 1])) {
+        prepTime = lines[i + 1].trim();
+      }
+      section = null;
+      continue;
+    }
+
+    if (line.startsWith("רמת קושי:")) {
+      const value = line.replace("רמת קושי:", "").trim();
+      if (value) {
+        difficulty = value;
+      } else if (lines[i + 1] && !isSectionHeader(lines[i + 1])) {
+        difficulty = lines[i + 1].trim();
+      }
+      section = null;
+      continue;
+    }
+
+    if (line.startsWith("רשימת מצרכים") || line.startsWith("מצרכים:")) {
+      section = "ingredients";
+      continue;
+    }
+
+    if (line.startsWith("אופן ההכנה:") || line.startsWith("אופן הכנה:")) {
+      section = "steps";
+      continue;
+    }
+
+    if (line.startsWith("טיפים")) {
+      section = null;
+      continue;
+    }
+
+    if (section === "ingredients") {
+      const cleaned = cleanListLine(line);
+      if (cleaned) ingredients.push(cleaned);
+      continue;
+    }
+
+    if (section === "steps") {
+      const cleaned = cleanListLine(line);
+      if (cleaned) steps.push(cleaned);
+    }
+  }
+
+  return { title, prepTime, difficulty, ingredients, steps };
 }
 
 function normalizeText(value: string): string {
@@ -129,14 +262,19 @@ function normalizeText(value: string): string {
 
 function extractIngredientLines(recipe: string): string[] {
   const lines = recipe.split("\n").map((line) => line.trim());
-  const start = lines.findIndex((line) => line.startsWith("רשימת מצרכים עם כמויות:"));
+  const start = lines.findIndex(
+    (line) =>
+      line.startsWith("רשימת מצרכים עם כמויות:") ||
+      line.startsWith("רשימת מצרכים:") ||
+      line.startsWith("מצרכים:")
+  );
   if (start < 0) return [];
 
   const result: string[] = [];
   for (let i = start + 1; i < lines.length; i += 1) {
     const line = lines[i];
     if (!line) continue;
-    if (line.startsWith("אופן ההכנה:")) break;
+    if (line.startsWith("אופן ההכנה:") || line.startsWith("אופן הכנה:")) break;
 
     const cleaned = line.replace(/^[-*•]\s*/, "").trim();
     if (cleaned) result.push(cleaned);
@@ -177,6 +315,188 @@ function isRecipeGrounded(recipe: string, ingredients: string[]): boolean {
   }
 
   return usedUserIngredients.size >= Math.min(2, normalizedUserIngredients.length);
+}
+
+function isHebrewFluent(recipe: string): boolean {
+  const hebrewChars = (recipe.match(/[\u0590-\u05FF]/g) ?? []).length;
+  const latinWords = recipe.match(/\b[A-Za-z][A-Za-z'’-]*\b/g) ?? [];
+  const mixedScriptTokens =
+    recipe.match(/(?=.*[A-Za-z])(?=.*[\u0590-\u05FF])[A-Za-z\u0590-\u05FF][A-Za-z\u0590-\u05FF'’-]*/g) ?? [];
+
+  if (hebrewChars < 40) return false;
+  if (latinWords.length > 0) return false;
+  if (mixedScriptTokens.length > 0) return false;
+  return true;
+}
+
+function hasStepVerb(step: string): boolean {
+  return /(חותכ|קוצצ|מערבב|מחממ|מוסיפ|מטגנ|מבש|צול|קול|טורפ|מגיש|מתבל|מניח|אופ)/.test(step);
+}
+
+function scoreRecipeQuality(recipe: string, ingredients: string[]): number {
+  const parsed = parseRecipeStructure(recipe);
+  let score = 0;
+
+  if (parsed.title.length >= 2) score += 1;
+  if (parsed.prepTime.length >= 2) score += 1;
+  if (parsed.difficulty.length >= 2) score += 1;
+
+  if (parsed.ingredients.length >= Math.min(ingredients.length, 2)) score += 1;
+  if (parsed.steps.length >= 3 && parsed.steps.length <= 6) score += 2;
+
+  const validSteps = parsed.steps.filter((step) => step.length >= 10 && step.length <= 220 && hasStepVerb(step));
+  if (validSteps.length >= 3) score += 2;
+
+  return score;
+}
+
+function inferAmountForIngredient(ingredient: string): string {
+  if (/\d/.test(ingredient)) return ingredient;
+  const normalized = normalizeText(ingredient);
+
+  if (normalized.includes("ביצ")) return `${ingredient} - 2 יחידות`;
+  if (normalized.includes("לחם") || normalized.includes("פיתה") || normalized.includes("טורט")) {
+    return `${ingredient} - 2 יחידות`;
+  }
+  if (normalized.includes("עגבנ") || normalized.includes("מלפפון")) return `${ingredient} - 1 יחידה`;
+  if (normalized.includes("גבינ") || normalized.includes("קוטג") || normalized.includes("יוגורט")) {
+    return `${ingredient} - 100 גרם`;
+  }
+
+  return `${ingredient} - 1/2 כוס`;
+}
+
+function buildFallbackRecipe(ingredients: string[], mealType?: string, maxMinutes?: number): string {
+  const first = ingredients[0] ?? "מרכיב ראשי";
+  const second = ingredients[1] ?? "מרכיב נוסף";
+  const title = `מחבת מהירה עם ${first} ו${second}`;
+  const prepMinutes = Math.min(Math.max(maxMinutes ?? 12, 7), 25);
+  const difficulty = "קל";
+
+  const ingredientLines = ingredients.map((item) => `- ${inferAmountForIngredient(item)}`);
+  ingredientLines.push("- שמן - 1 כף");
+  ingredientLines.push("- מלח - 1/4 כפית");
+  ingredientLines.push("- פלפל - 1/4 כפית");
+  ingredientLines.push("- מים - 2 כפות לפי הצורך");
+
+  const mealHint = mealType ? `מתאים בעיקר ל${mealType}.` : "מתאים לארוחה מהירה.";
+
+  const steps = [
+    `מכינים את כל המצרכים מראש. אם צריך, חותכים את ${first} ואת ${second} לחתיכות קטנות.`,
+    "מחממים מחבת עם שמן על אש בינונית.",
+    `מוסיפים למחבת את ${first} ואת ${second}, מערבבים ומבשלים 3-4 דקות.`,
+    "מוסיפים את שאר המצרכים, מתבלים במלח ופלפל ומבשלים עוד 2-3 דקות תוך ערבוב.",
+    "אם התערובת יבשה, מוסיפים מעט מים, מבשלים דקה נוספת ומגישים מיד."
+  ];
+
+  const tips = [
+    "טועמים בסוף ומתקנים תיבול לפי הטעם.",
+    mealHint
+  ];
+
+  return [
+    `שם המתכון: ${title}`,
+    `זמן הכנה: ${prepMinutes} דקות`,
+    `רמת קושי: ${difficulty}`,
+    "",
+    "רשימת מצרכים עם כמויות:",
+    ...ingredientLines,
+    "",
+    "אופן ההכנה:",
+    ...steps.map((step, index) => `${index + 1}. ${step}`),
+    "",
+    "טיפים (אופציונלי):",
+    ...tips.map((tip) => `- ${tip}`)
+  ].join("\n");
+}
+
+function isCandidateAcceptable(candidate: RecipeCandidate): boolean {
+  return candidate.grounded && candidate.fluent && candidate.qualityScore >= 6;
+}
+
+function buildCandidate(recipe: string, model: string, ingredients: string[]): RecipeCandidate {
+  const normalizedRecipe = normalizeModelOutput(recipe);
+  const grounded = isRecipeGrounded(normalizedRecipe, ingredients);
+  const fluent = isHebrewFluent(normalizedRecipe);
+  const qualityScore = scoreRecipeQuality(normalizedRecipe, ingredients);
+  const score = (grounded ? 100 : 0) + (fluent ? 20 : 0) + qualityScore;
+
+  return { recipe: normalizedRecipe, model, score, grounded, fluent, qualityScore };
+}
+
+async function refineRecipeCandidate(
+  rawRecipe: string,
+  model: string,
+  apiKey: string,
+  ingredients: string[]
+): Promise<string | null> {
+  const refinementPrompt = [
+    "תקני את המתכון הבא לעברית תקינה ורציפה בלבד.",
+    "אסור אותיות לטיניות בכלל.",
+    "אסור להוסיף מרכיבים חדשים.",
+    "מותר להשתמש רק במרכיבים הבאים + מזווה בסיסי (מלח, פלפל, שמן, מים):",
+    ingredients.map((item) => `- ${item}`).join("\n"),
+    "",
+    "החזירי בדיוק בפורמט:",
+    "שם המתכון:",
+    "זמן הכנה:",
+    "רמת קושי:",
+    "",
+    "רשימת מצרכים עם כמויות:",
+    "- ...",
+    "",
+    "אופן ההכנה:",
+    "1.",
+    "2.",
+    "3.",
+    "",
+    "טיפים (אופציונלי):",
+    "",
+    "מתכון גולמי לתיקון:",
+    rawRecipe
+  ].join("\n");
+
+  for (let attempt = 1; attempt <= MAX_REFINEMENT_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetchWithTimeout(ROUTER_CHAT_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: getSystemPrompt() },
+            { role: "user", content: refinementPrompt }
+          ],
+          temperature: 0.2,
+          max_tokens: 850
+        })
+      });
+
+      if (!response.ok) {
+        if (response.status >= 500 && response.status <= 599 && attempt < MAX_REFINEMENT_ATTEMPTS) {
+          await sleep(600);
+          continue;
+        }
+        return null;
+      }
+
+      const payload = (await response.json()) as unknown;
+      const recipe = parseRouterRecipe(payload);
+      if (recipe) return recipe;
+      return null;
+    } catch {
+      if (attempt < MAX_REFINEMENT_ATTEMPTS) {
+        await sleep(500);
+        continue;
+      }
+      return null;
+    }
+  }
+
+  return null;
 }
 
 function getErrorText(raw: string): string {
@@ -221,7 +541,7 @@ async function generateViaLegacy(
   ingredients: string[]
 ): Promise<GenerationResult | null> {
   const legacyPrompt = `<s>[INST] ${getSystemPrompt()}\n\n${userPrompt} [/INST]`;
-  let fallbackRecipe: { recipe: string; model: string } | null = null;
+  let bestCandidate: RecipeCandidate | null = null;
 
   for (const model of LEGACY_MODELS) {
     const endpoint = `${LEGACY_BASE_URL}/${model}`;
@@ -258,11 +578,33 @@ async function generateViaLegacy(
       if (response.ok) {
         const payload = (await response.json()) as unknown;
         const recipe = parseLegacyRecipe(payload);
-        if (recipe && isRecipeGrounded(recipe, ingredients)) {
-          return { ok: true, recipe, model, source: "legacy" };
-        }
-        if (recipe && !fallbackRecipe) {
-          fallbackRecipe = { recipe, model };
+        if (recipe) {
+          let candidate = buildCandidate(recipe, model, ingredients);
+
+          if (candidate.score < 3) {
+            const refined = await refineRecipeCandidate(candidate.recipe, "Qwen/Qwen2.5-7B-Instruct", apiKey, ingredients);
+            if (refined) {
+              const refinedCandidate = buildCandidate(refined, model, ingredients);
+              if (refinedCandidate.score > candidate.score) {
+                candidate = refinedCandidate;
+              }
+            }
+          }
+
+          if (isCandidateAcceptable(candidate)) {
+            return {
+              ok: true,
+              recipe: candidate.recipe,
+              model,
+              source: "legacy",
+              qualityScore: candidate.qualityScore,
+              grounded: candidate.grounded,
+              fluent: candidate.fluent
+            };
+          }
+          if (!bestCandidate || candidate.score > bestCandidate.score) {
+            bestCandidate = candidate;
+          }
         }
         continue;
       }
@@ -297,8 +639,16 @@ async function generateViaLegacy(
     }
   }
 
-  if (fallbackRecipe) {
-    return { ok: true, recipe: fallbackRecipe.recipe, model: fallbackRecipe.model, source: "legacy" };
+  if (bestCandidate) {
+    return {
+      ok: true,
+      recipe: bestCandidate.recipe,
+      model: bestCandidate.model,
+      source: "legacy",
+      qualityScore: bestCandidate.qualityScore,
+      grounded: bestCandidate.grounded,
+      fluent: bestCandidate.fluent
+    };
   }
 
   return null;
@@ -310,7 +660,7 @@ async function generateViaRouter(
   ingredients: string[]
 ): Promise<GenerationResult> {
   const systemPrompt = getSystemPrompt();
-  let fallbackRecipe: { recipe: string; model: string } | null = null;
+  let bestCandidate: RecipeCandidate | null = null;
 
   for (const model of ROUTER_MODELS) {
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
@@ -346,11 +696,33 @@ async function generateViaRouter(
       if (response.ok) {
         const payload = (await response.json()) as unknown;
         const recipe = parseRouterRecipe(payload);
-        if (recipe && isRecipeGrounded(recipe, ingredients)) {
-          return { ok: true, recipe, model, source: "router" };
-        }
-        if (recipe && !fallbackRecipe) {
-          fallbackRecipe = { recipe, model };
+        if (recipe) {
+          let candidate = buildCandidate(recipe, model, ingredients);
+
+          if (candidate.score < 3) {
+            const refined = await refineRecipeCandidate(candidate.recipe, model, apiKey, ingredients);
+            if (refined) {
+              const refinedCandidate = buildCandidate(refined, model, ingredients);
+              if (refinedCandidate.score > candidate.score) {
+                candidate = refinedCandidate;
+              }
+            }
+          }
+
+          if (isCandidateAcceptable(candidate)) {
+            return {
+              ok: true,
+              recipe: candidate.recipe,
+              model,
+              source: "router",
+              qualityScore: candidate.qualityScore,
+              grounded: candidate.grounded,
+              fluent: candidate.fluent
+            };
+          }
+          if (!bestCandidate || candidate.score > bestCandidate.score) {
+            bestCandidate = candidate;
+          }
         }
         if (attempt < MAX_RETRIES) {
           await sleep(500 * attempt);
@@ -391,8 +763,16 @@ async function generateViaRouter(
     }
   }
 
-  if (fallbackRecipe) {
-    return { ok: true, recipe: fallbackRecipe.recipe, model: fallbackRecipe.model, source: "router" };
+  if (bestCandidate) {
+    return {
+      ok: true,
+      recipe: bestCandidate.recipe,
+      model: bestCandidate.model,
+      source: "router",
+      qualityScore: bestCandidate.qualityScore,
+      grounded: bestCandidate.grounded,
+      fluent: bestCandidate.fluent
+    };
   }
 
   return {
@@ -432,15 +812,19 @@ export async function POST(request: Request) {
   }
 
   const userPrompt = buildUserPrompt(ingredients, mealType, maxMinutes);
+  let bestGenerated: Extract<GenerationResult, { ok: true }> | null = null;
 
   const legacyResult = await generateViaLegacy(userPrompt, apiKey, ingredients);
   if (legacyResult?.ok) {
-    return NextResponse.json({
-      success: true,
-      recipe: legacyResult.recipe,
-      model: legacyResult.model,
-      source: legacyResult.source
-    });
+    bestGenerated = legacyResult;
+    if (legacyResult.grounded && legacyResult.fluent && legacyResult.qualityScore >= MIN_QUALITY_SCORE) {
+      return NextResponse.json({
+        success: true,
+        recipe: legacyResult.recipe,
+        model: legacyResult.model,
+        source: legacyResult.source
+      });
+    }
   }
 
   if (legacyResult && !legacyResult.ok && [401, 403, 429, 504].includes(legacyResult.status)) {
@@ -452,16 +836,49 @@ export async function POST(request: Request) {
 
   const routerResult = await generateViaRouter(userPrompt, apiKey, ingredients);
   if (routerResult.ok) {
+    if (!bestGenerated || routerResult.qualityScore > bestGenerated.qualityScore) {
+      bestGenerated = routerResult;
+    }
+    if (routerResult.grounded && routerResult.fluent && routerResult.qualityScore >= MIN_QUALITY_SCORE) {
+      return NextResponse.json({
+        success: true,
+        recipe: routerResult.recipe,
+        model: routerResult.model,
+        source: routerResult.source
+      });
+    }
+  }
+
+  if (
+    bestGenerated &&
+    bestGenerated.grounded &&
+    bestGenerated.fluent &&
+    bestGenerated.qualityScore >= Math.max(6, MIN_QUALITY_SCORE - 1)
+  ) {
     return NextResponse.json({
       success: true,
-      recipe: routerResult.recipe,
-      model: routerResult.model,
-      source: routerResult.source
+      recipe: bestGenerated.recipe,
+      model: bestGenerated.model,
+      source: bestGenerated.source
     });
   }
 
-  return NextResponse.json(
-    { success: false, error: routerResult.error, details: routerResult.details },
-    { status: routerResult.status }
-  );
+  if (bestGenerated) {
+    const fallbackRecipe = buildFallbackRecipe(ingredients, mealType, maxMinutes);
+    return NextResponse.json({
+      success: true,
+      recipe: fallbackRecipe,
+      model: "rule-based-he",
+      source: "fallback"
+    });
+  }
+
+  if (!routerResult.ok) {
+    return NextResponse.json(
+      { success: false, error: routerResult.error, details: routerResult.details },
+      { status: routerResult.status }
+    );
+  }
+
+  return NextResponse.json({ success: false, error: "לא הצלחנו ליצור מתכון כרגע. נסי שוב." }, { status: 502 });
 }
