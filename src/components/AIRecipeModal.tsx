@@ -15,6 +15,7 @@ interface ApiResponse {
   success: boolean;
   recipe?: string;
   error?: string;
+  details?: string;
 }
 
 function parseIngredients(input: string): string[] {
@@ -85,7 +86,8 @@ export function AIRecipeModal({ open, onClose }: AIRecipeModalProps) {
 
       const data = (await response.json()) as ApiResponse;
       if (!response.ok || !data.success || !data.recipe) {
-        setError(data.error ?? "לא הצלחנו לייצר מתכון כרגע.");
+        const combinedError = data.details ? `${data.error ?? "שגיאה"} (${data.details})` : data.error;
+        setError(combinedError ?? "לא הצלחנו לייצר מתכון כרגע.");
         return;
       }
 
