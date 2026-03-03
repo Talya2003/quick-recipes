@@ -20,7 +20,15 @@ function cleanLinePrefix(value: string): string {
 }
 
 function parseRecipe(raw: string): ParsedRecipe {
-  const lines = raw
+  const normalized = raw
+    .replace(/\s*(זמן הכנה:)/g, "\n$1")
+    .replace(/\s*(רמת קושי:)/g, "\n$1")
+    .replace(/\s*(רשימת מצרכים עם כמויות:)/g, "\n\n$1")
+    .replace(/\s*(אופן ההכנה:)/g, "\n\n$1")
+    .replace(/\s*(טיפים(?:\s*\(אופציונלי\))?:)/g, "\n\n$1")
+    .replace(/\n{3,}/g, "\n\n");
+
+  const lines = normalized
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
