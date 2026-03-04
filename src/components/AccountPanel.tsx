@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { track } from "@/lib/track";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -11,18 +12,33 @@ interface SavedRecipeItem {
   created_at: string;
 }
 
+interface PublishedRecipeItem {
+  id: string;
+  title: string;
+  description: string;
+  created_at: string;
+}
+
 interface AccountPanelProps {
   userId: string;
   userEmail: string;
   initialDisplayName: string;
   joinedAt: string | null;
-  initialRecipes: SavedRecipeItem[];
+  initialSavedRecipes: SavedRecipeItem[];
+  initialPublishedRecipes: PublishedRecipeItem[];
 }
 
-export function AccountPanel({ userId, userEmail, initialDisplayName, joinedAt, initialRecipes }: AccountPanelProps) {
+export function AccountPanel({
+  userId,
+  userEmail,
+  initialDisplayName,
+  joinedAt,
+  initialSavedRecipes,
+  initialPublishedRecipes
+}: AccountPanelProps) {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const [displayName, setDisplayName] = useState(initialDisplayName);
-  const [recipes, setRecipes] = useState(initialRecipes);
+  const [savedRecipes, setSavedRecipes] = useState(initialSavedRecipes);
   const [profileStatus, setProfileStatus] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [activeDeleteId, setActiveDeleteId] = useState<string | null>(null);
@@ -53,7 +69,7 @@ export function AccountPanel({ userId, userEmail, initialDisplayName, joinedAt, 
       return;
     }
 
-    setRecipes((prev) => prev.filter((item) => item.id !== id));
+    setSavedRecipes((prev) => prev.filter((item) => item.id !== id));
     track("saved_recipe_delete", { id });
   };
 
@@ -97,17 +113,17 @@ export function AccountPanel({ userId, userEmail, initialDisplayName, joinedAt, 
 
       <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-card dark:border-zinc-800 dark:bg-zinc-900">
         <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 className="text-xl font-bold">מתכונים שמורים</h2>
-          <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs font-semibold dark:bg-zinc-800">{recipes.length} מתכונים</span>
+          <h2 className="text-xl font-bold">מתכונים ששמרת</h2>
+          <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs font-semibold dark:bg-zinc-800">{savedRecipes.length} מתכונים</span>
         </div>
 
-        {recipes.length === 0 ? (
+        {savedRecipes.length === 0 ? (
           <p className="rounded-xl border border-dashed border-zinc-300 p-4 text-sm text-zinc-600 dark:border-zinc-700 dark:text-zinc-300">
-            עדיין אין מתכונים שמורים. אפשר ליצור מתכון דרך כפתור ה-AI ולשמור אותו לחשבון.
+            עדיין אין מתכונים שמורים. אפשר לשמור מתכוני קהילה או לשמור מתכון שנוצר ב-AI.
           </p>
         ) : (
           <ul className="space-y-3" aria-label="רשימת מתכונים שמורים">
-            {recipes.map((recipe) => (
+            {savedRecipes.map((recipe) => (
               <li key={recipe.id} className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-700">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <h3 className="text-base font-bold">{recipe.title}</h3>
@@ -144,6 +160,40 @@ export function AccountPanel({ userId, userEmail, initialDisplayName, joinedAt, 
           </ul>
         )}
       </section>
+
+      <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-card dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-xl font-bold">מתכונים שפרסמת</h2>
+          <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs font-semibold dark:bg-zinc-800">
+            {initialPublishedRecipes.length} מתכונים
+          </span>
+        </div>
+
+        {initialPublishedRecipes.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-zinc-300 p-4 text-sm text-zinc-600 dark:border-zinc-700 dark:text-zinc-300">
+            עדיין לא פרסמת מתכונים לקהילה. אפשר לפרסם דרך עמוד{" "}
+            <Link href="/submit" className="font-semibold text-brand-700 underline dark:text-brand-300">
+              שלחי מתכון
+            </Link>
+            .
+          </p>
+        ) : (
+          <ul className="space-y-3" aria-label="רשימת מתכונים שפורסמו">
+            {initialPublishedRecipes.map((recipe) => (
+              <li key={recipe.id} className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-700">
+                <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                  <Link href={`/community/${recipe.id}`} className="text-base font-bold hover:text-brand-700 dark:hover:text-brand-300">
+                    {recipe.title}
+                  </Link>
+                  <span className="text-xs text-zinc-500 dark:text-zinc-400">{new Date(recipe.created_at).toLocaleDateString("he-IL")}</span>
+                </div>
+                <p className="text-sm text-zinc-600 dark:text-zinc-300">{recipe.description}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }
+

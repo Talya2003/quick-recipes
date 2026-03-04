@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/recipes", label: "כל המתכונים" },
+  { href: "/community", label: "מתכוני קהילה" },
   { href: "/categories", label: "קטגוריות" },
   { href: "/submit", label: "שלחי מתכון" },
   { href: "/about", label: "אודות" }

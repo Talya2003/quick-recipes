@@ -7,6 +7,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
   const staticRoutes: MetadataRoute.Sitemap = [
     "",
     "/recipes",
+    "/community",
     "/categories",
     "/search",
     "/submit",
