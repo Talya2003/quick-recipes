@@ -15,6 +15,32 @@ const emptyDraft: SubmitRecipeDraft = {
   tags: ""
 };
 
+function splitByLines(value: string): string[] {
+  return value
+    .split("\n")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function splitTags(value: string): string[] {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function toDifficulty(minutes: number): "קל" | "בינוני" {
+  return minutes <= 12 ? "קל" : "בינוני";
+}
+
+function buildDescription(values: SubmitRecipeDraft): string {
+  const firstStep = splitByLines(values.steps)[0];
+  if (firstStep) {
+    return firstStep.slice(0, 120);
+  }
+  return "מתכון קהילה מהיר עם מעט מצרכים.";
+}
+
 function createRecipeText(values: SubmitRecipeDraft): string {
   const tagsLine = values.tags.trim() ? `\n\nתגיות: ${values.tags.trim()}` : "";
   return [
@@ -101,30 +127,83 @@ export function SubmitRecipeForm() {
     });
 
     if (!user) {
-      setError("כדי לשמור מתכון בענן צריך להתחבר קודם.");
+      setError("כדי לפרסם או לשמור מתכון, צריך להתחבר קודם.");
+      return;
+    }
+
+    const minutes = Number(formValues.minutes);
+    const ingredients = splitByLines(formValues.ingredients);
+    const steps = splitByLines(formValues.steps);
+    const tags = splitTags(formValues.tags);
+
+    if (!Number.isFinite(minutes) || minutes <= 0) {
+      setError("זמן הכנה לא תקין.");
+      return;
+    }
+
+    if (ingredients.length < 2) {
+      setError("צריך להזין לפחות שני מצרכים.");
+      return;
+    }
+
+    if (steps.length < 2) {
+      setError("צריך להזין לפחות שני שלבי הכנה.");
       return;
     }
 
     setSubmitting(true);
+    const recipeText = createRecipeText(formValues);
 
-    const { error: insertError } = await supabase.from("saved_recipes").insert({
-      id: crypto.randomUUID(),
-      user_id: user.id,
-      title: formValues.name.trim(),
-      recipe_text: createRecipeText(formValues)
-    });
+    const [savedResult, publicResult] = await Promise.all([
+      supabase.from("saved_recipes").insert({
+        id: crypto.randomUUID(),
+        user_id: user.id,
+        title: formValues.name.trim(),
+        recipe_text: recipeText
+      }),
+      supabase.from("public_recipes").insert({
+        id: crypto.randomUUID(),
+        author_id: user.id,
+        title: formValues.name.trim(),
+        description: buildDescription(formValues),
+        minutes_total: minutes,
+        difficulty: toDifficulty(minutes),
+        ingredients,
+        steps,
+        tags,
+        recipe_text: recipeText
+      })
+    ]);
 
     setSubmitting(false);
 
-    if (insertError) {
-      setError("שמירת המתכון נכשלה כרגע. נסי שוב.");
+    const savedError = savedResult.error;
+    const publicError = publicResult.error;
+
+    if (!savedError && !publicError) {
+      setSuccess("המתכון נשמר אצלך וגם פורסם למתכוני הקהילה.");
+      setLoadedFromAi(false);
+      setFormValues(emptyDraft);
+      track("saved_recipe_add", { source: "submit_form" });
+      track("public_recipe_publish", { source: "submit_form" });
       return;
     }
 
-    setSuccess("המתכון נשמר בהצלחה באזור האישי.");
-    setLoadedFromAi(false);
-    setFormValues(emptyDraft);
-    track("saved_recipe_add", { source: "submit_form" });
+    if (!savedError && publicError) {
+      setSuccess("המתכון נשמר אצלך, אבל הפרסום לקהילה נכשל כרגע.");
+      setError("בדקי שהטבלה public_recipes קיימת ושיש לה Policies מתאימות.");
+      track("saved_recipe_add", { source: "submit_form_partial" });
+      return;
+    }
+
+    if (savedError && !publicError) {
+      setSuccess("המתכון פורסם לקהילה, אבל לא נשמר לרשימה האישית.");
+      setError("אפשר לשמור אותו מחדש מעמוד הקהילה.");
+      track("public_recipe_publish", { source: "submit_form_partial" });
+      return;
+    }
+
+    setError("שמירת המתכון נכשלה כרגע. נסי שוב.");
   };
 
   return (
@@ -204,7 +283,10 @@ export function SubmitRecipeForm() {
 
       {!user && (
         <p className="text-sm text-zinc-600 dark:text-zinc-300">
-          כדי לשמור מתכון לחשבון, צריך להתחבר. <Link href="/login?next=/submit" className="font-semibold text-brand-700 underline dark:text-brand-300">להתחברות</Link>
+          כדי לפרסם מתכון לקהילה, צריך להתחבר.{" "}
+          <Link href="/login?next=/submit" className="font-semibold text-brand-700 underline dark:text-brand-300">
+            להתחברות
+          </Link>
         </p>
       )}
 
@@ -213,3 +295,4 @@ export function SubmitRecipeForm() {
     </form>
   );
 }
+

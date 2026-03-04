@@ -3,7 +3,7 @@ import { SubmitRecipeForm } from "@/components/SubmitRecipeForm";
 
 export const metadata: Metadata = {
   title: "שלחי מתכון",
-  description: "שליחת רעיון למתכון מהיר - בקרוב נפתח קליטה מלאה."
+  description: "העלאת מתכון מהיר לקהילה ושמירה אוטומטית לרשימה האישית."
 };
 
 export default function SubmitPage() {
@@ -11,9 +11,12 @@ export default function SubmitPage() {
     <div className="space-y-6">
       <header className="space-y-2">
         <h1 className="text-3xl font-bold">שלחי מתכון</h1>
-        <p className="text-zinc-600 dark:text-zinc-300">יש לך רעיון למתכון קצר? נשמח לשמוע. כרגע נשמר רק מקומית בדפדפן.</p>
+        <p className="text-zinc-600 dark:text-zinc-300">
+          יש לך מתכון קצר שעובד מעולה? שליחה מהעמוד הזה תפרסם אותו לקהילה וגם תשמור עותק ברשימה האישית שלך.
+        </p>
       </header>
       <SubmitRecipeForm />
     </div>
   );
 }
+
