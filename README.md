@@ -38,14 +38,33 @@ NEXT_PUBLIC_SITE_URL=http://localhost:3000
 
 הפרויקט משתמש ב:
 - Supabase Auth (Email + Password)
-- טבלאות `profiles` ו-`saved_recipes`
+- טבלאות `profiles`, `saved_recipes`
+- טבלת קהילה: `public_recipes`
 - RLS Policies
 
-זרימות שכבר ממומשות:
+### הקמת public_recipes
+
+הריצי את הסקריפט הבא ב-Supabase SQL Editor:
+
+- `supabase/sql/2026-03-04-public-recipes.sql`
+
+הסקריפט יוצר:
+- טבלת `public_recipes`
+- אינדקסים
+- RLS + Policies לקריאה ציבורית והוספה/עדכון/מחיקה רק ע"י בעלת המתכון
+
+## זרימות עיקריות באפליקציה
+
 - `/login` התחברות והרשמה
-- `/account` אזור אישי עם עדכון שם תצוגה
-- שמירה ומחיקה של מתכונים בטבלת `saved_recipes`
-- שמירה ישירה של מתכון AI לחשבון (כשמחוברים)
+- `/account` אזור אישי עם:
+- עדכון שם תצוגה
+- צפייה במתכונים שנשמרו
+- צפייה במתכונים שפורסמו לקהילה
+- `/submit` שליחת מתכון:
+- שומרת עותק בטבלת `saved_recipes`
+- מפרסמת לטבלת `public_recipes`
+- `/community` מתכוני קהילה לצפייה לכל המשתמשים
+- שמירה של מתכון קהילה לרשימה האישית
 
 ## AI Recipe Generator (Hugging Face)
 
@@ -68,3 +87,4 @@ NEXT_PUBLIC_SITE_URL=http://localhost:3000
 
 - AI מוגבל למצרכים שסופקו + פריטי מזווה בסיסיים (מלח, פלפל, שמן, מים)
 - קיימים Retry ו-Timeout לקריאות AI
+
