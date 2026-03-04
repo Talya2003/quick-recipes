@@ -1,7 +1,10 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import type { User } from "@supabase/supabase-js";
 import { SUBMIT_RECIPE_DRAFT_KEY, type SubmitRecipeDraft } from "@/lib/aiRecipe";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { track } from "@/lib/track";
 
 const emptyDraft: SubmitRecipeDraft = {
@@ -12,10 +15,31 @@ const emptyDraft: SubmitRecipeDraft = {
   tags: ""
 };
 
+function createRecipeText(values: SubmitRecipeDraft): string {
+  const tagsLine = values.tags.trim() ? `\n\nתגיות: ${values.tags.trim()}` : "";
+  return [
+    `זמן כולל: ${values.minutes} דקות`,
+    "",
+    "מצרכים:",
+    values.ingredients.trim(),
+    "",
+    "אופן הכנה:",
+    values.steps.trim(),
+    tagsLine
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function SubmitRecipeForm() {
-  const [success, setSuccess] = useState(false);
+  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
+
+  const [success, setSuccess] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [loadedFromAi, setLoadedFromAi] = useState(false);
   const [formValues, setFormValues] = useState<SubmitRecipeDraft>(emptyDraft);
+  const [submitting, setSubmitting] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
     const raw = localStorage.getItem(SUBMIT_RECIPE_DRAFT_KEY);
@@ -38,8 +62,37 @@ export function SubmitRecipeForm() {
     }
   }, []);
 
-  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+  useEffect(() => {
+    let active = true;
+
+    const hydrateUser = async () => {
+      const {
+        data: { user: currentUser }
+      } = await supabase.auth.getUser();
+
+      if (active) {
+        setUser(currentUser);
+      }
+    };
+
+    void hydrateUser();
+
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, [supabase]);
+
+  const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setSuccess(null);
+    setError(null);
 
     track("submit_intent", {
       source: loadedFromAi ? "ai_draft" : "manual",
@@ -47,9 +100,31 @@ export function SubmitRecipeForm() {
       minutes: formValues.minutes
     });
 
-    setSuccess(true);
+    if (!user) {
+      setError("כדי לשמור מתכון בענן צריך להתחבר קודם.");
+      return;
+    }
+
+    setSubmitting(true);
+
+    const { error: insertError } = await supabase.from("saved_recipes").insert({
+      id: crypto.randomUUID(),
+      user_id: user.id,
+      title: formValues.name.trim(),
+      recipe_text: createRecipeText(formValues)
+    });
+
+    setSubmitting(false);
+
+    if (insertError) {
+      setError("שמירת המתכון נכשלה כרגע. נסי שוב.");
+      return;
+    }
+
+    setSuccess("המתכון נשמר בהצלחה באזור האישי.");
     setLoadedFromAi(false);
     setFormValues(emptyDraft);
+    track("saved_recipe_add", { source: "submit_form" });
   };
 
   return (
@@ -119,11 +194,22 @@ export function SubmitRecipeForm() {
         />
       </label>
 
-      <button type="submit" className="rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700">
-        שלחי מתכון
+      <button
+        type="submit"
+        disabled={submitting}
+        className="rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-70"
+      >
+        {submitting ? "שומר..." : "שלחי מתכון"}
       </button>
 
-      {success && <p className="text-sm font-medium text-brand-700 dark:text-brand-300">תודה. הפיצ׳ר המלא יעלה בקרוב (Coming Soon).</p>}
+      {!user && (
+        <p className="text-sm text-zinc-600 dark:text-zinc-300">
+          כדי לשמור מתכון לחשבון, צריך להתחבר. <Link href="/login?next=/submit" className="font-semibold text-brand-700 underline dark:text-brand-300">להתחברות</Link>
+        </p>
+      )}
+
+      {success && <p className="text-sm font-medium text-brand-700 dark:text-brand-300">{success}</p>}
+      {error && <p className="text-sm font-medium text-red-700 dark:text-red-300">{error}</p>}
     </form>
   );
 }
