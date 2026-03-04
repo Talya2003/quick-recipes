@@ -45,6 +45,48 @@ export interface Database {
         };
         Relationships: [];
       };
+      public_recipes: {
+        Row: {
+          id: string;
+          author_id: string;
+          title: string;
+          description: string;
+          minutes_total: number;
+          difficulty: "קל" | "בינוני";
+          ingredients: string[];
+          steps: string[];
+          tags: string[];
+          recipe_text: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          author_id: string;
+          title: string;
+          description: string;
+          minutes_total: number;
+          difficulty: "קל" | "בינוני";
+          ingredients: string[];
+          steps: string[];
+          tags?: string[];
+          recipe_text: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          author_id?: string;
+          title?: string;
+          description?: string;
+          minutes_total?: number;
+          difficulty?: "קל" | "בינוני";
+          ingredients?: string[];
+          steps?: string[];
+          tags?: string[];
+          recipe_text?: string;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;
