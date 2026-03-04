@@ -2,8 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import type { User } from "@supabase/supabase-js";
 import { AIRecipeResult } from "@/components/AIRecipeResult";
 import { extractMinutes, parseAIRecipe, SUBMIT_RECIPE_DRAFT_KEY, type SubmitRecipeDraft } from "@/lib/aiRecipe";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { track } from "@/lib/track";
 
 const mealTypeOptions = ["", "בוקר", "צהריים", "ערב", "קינוח"] as const;
@@ -29,15 +31,49 @@ function parseIngredients(input: string): string[] {
 
 export function AIRecipeModal({ open, onClose }: AIRecipeModalProps) {
   const router = useRouter();
+  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
+
   const [ingredientsText, setIngredientsText] = useState("");
   const [mealType, setMealType] = useState<string>("");
   const [maxMinutes, setMaxMinutes] = useState<string>("");
   const [loading, setLoading] = useState(false);
+  const [saveLoading, setSaveLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recipe, setRecipe] = useState<string | null>(null);
-  const [addDraftSuccess, setAddDraftSuccess] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
   const ingredients = useMemo(() => parseIngredients(ingredientsText), [ingredientsText]);
+
+  useEffect(() => {
+    let active = true;
+
+    const hydrateUser = async () => {
+      const {
+        data: { user: currentUser }
+      } = await supabase.auth.getUser();
+
+      if (active) {
+        setUser(currentUser);
+        setAuthLoading(false);
+      }
+    };
+
+    void hydrateUser();
+
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, [supabase]);
 
   useEffect(() => {
     if (!open) return;
@@ -68,7 +104,7 @@ export function AIRecipeModal({ open, onClose }: AIRecipeModalProps) {
   const generateRecipe = async () => {
     setError(null);
     setRecipe(null);
-    setAddDraftSuccess(null);
+    setSuccessMessage(null);
 
     if (!validateInput()) return;
 
@@ -105,10 +141,34 @@ export function AIRecipeModal({ open, onClose }: AIRecipeModalProps) {
     }
   };
 
-  const addRecipeToSite = () => {
+  const addRecipeToSite = async () => {
     if (!recipe) return;
 
+    setError(null);
+    setSuccessMessage(null);
+
     const parsed = parseAIRecipe(recipe);
+
+    if (user) {
+      setSaveLoading(true);
+      const { error: insertError } = await supabase.from("saved_recipes").insert({
+        id: crypto.randomUUID(),
+        user_id: user.id,
+        title: parsed.title || "מתכון AI",
+        recipe_text: recipe
+      });
+      setSaveLoading(false);
+
+      if (insertError) {
+        setError("לא הצלחנו לשמור את המתכון לחשבון כרגע.");
+        return;
+      }
+
+      setSuccessMessage("המתכון נשמר לחשבון שלך באזור האישי.");
+      track("saved_recipe_add", { source: "ai_modal", ingredients_count: ingredients.length });
+      return;
+    }
+
     const fallbackIngredients = ingredients.map((item) => `${item} - לפי הצורך`);
     const draft: SubmitRecipeDraft = {
       name: parsed.title || "מתכון AI",
@@ -119,8 +179,8 @@ export function AIRecipeModal({ open, onClose }: AIRecipeModalProps) {
     };
 
     localStorage.setItem(SUBMIT_RECIPE_DRAFT_KEY, JSON.stringify(draft));
-    setAddDraftSuccess("הטיוטה נשמרה. מעבירה לעמוד שליחת מתכון...");
-    track("submit_intent", { source: "ai_recipe", name: draft.name, minutes: draft.minutes });
+    setSuccessMessage("הטיוטה נשמרה מקומית. מעבירה לעמוד שליחת מתכון...");
+    track("submit_intent", { source: "ai_recipe_guest", name: draft.name, minutes: draft.minutes });
 
     window.setTimeout(() => {
       onClose();
@@ -203,19 +263,26 @@ export function AIRecipeModal({ open, onClose }: AIRecipeModalProps) {
               )}
               {loading ? "מייצר מתכון..." : "יצירת מתכון"}
             </button>
+
             <button
               type="button"
-              onClick={addRecipeToSite}
-              disabled={!recipe || loading}
+              onClick={() => {
+                void addRecipeToSite();
+              }}
+              disabled={!recipe || loading || saveLoading || authLoading}
               className="rounded-xl border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
             >
-              הוסיפי כמתכון לאתר
+              {saveLoading ? "שומר..." : user ? "שמירה לחשבון" : "הוסיפי כמתכון לאתר"}
             </button>
           </div>
 
-          {addDraftSuccess && (
+          {!user && !authLoading && (
+            <p className="text-xs text-zinc-600 dark:text-zinc-300">כדי לשמור ישירות לענן, התחברי ואז שמרי מהמודאל.</p>
+          )}
+
+          {successMessage && (
             <div className="rounded-xl border border-brand-200 bg-brand-50 px-3 py-2 text-sm text-brand-800 dark:border-brand-900 dark:bg-brand-950/40 dark:text-brand-200">
-              {addDraftSuccess}
+              {successMessage}
             </div>
           )}
 
