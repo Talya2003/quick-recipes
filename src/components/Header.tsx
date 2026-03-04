@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { AuthControls } from "@/components/AuthControls";
 import { cn } from "@/lib/utils";
 
 const navItems = [
@@ -33,23 +34,26 @@ export function Header() {
           תפריט
         </button>
 
-        <nav className="hidden items-center gap-2 md:flex" aria-label="ניווט ראשי">
-          {navItems.map((item) => {
-            const isActive = pathname.startsWith(item.href);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  "rounded-xl px-3 py-2 text-sm font-medium transition hover:bg-zinc-100 dark:hover:bg-zinc-900",
-                  isActive && "bg-brand-50 text-brand-800 dark:bg-brand-900/30 dark:text-brand-200"
-                )}
-              >
-                {item.label}
-              </Link>
-            );
-          })}
-        </nav>
+        <div className="hidden items-center gap-3 md:flex">
+          <nav className="flex items-center gap-2" aria-label="ניווט ראשי">
+            {navItems.map((item) => {
+              const isActive = pathname.startsWith(item.href);
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={cn(
+                    "rounded-xl px-3 py-2 text-sm font-medium transition hover:bg-zinc-100 dark:hover:bg-zinc-900",
+                    isActive && "bg-brand-50 text-brand-800 dark:bg-brand-900/30 dark:text-brand-200"
+                  )}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
+          </nav>
+          <AuthControls />
+        </div>
       </div>
 
       <nav
@@ -57,20 +61,23 @@ export function Header() {
         aria-label="ניווט מובייל"
         className={cn(
           "mx-auto w-full max-w-6xl overflow-hidden px-4 transition-all sm:px-6 lg:px-8 md:hidden",
-          isOpen ? "max-h-80 pb-4" : "max-h-0"
+          isOpen ? "max-h-[28rem] pb-4" : "max-h-0"
         )}
       >
         <div className="grid gap-2 rounded-2xl border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900">
-          {navItems.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="rounded-xl px-3 py-2 text-sm font-medium hover:bg-zinc-100 dark:hover:bg-zinc-800"
-              onClick={() => setIsOpen(false)}
-            >
-              {item.label}
-            </Link>
-          ))}
+          {navItems.map((item) => {
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className="rounded-xl px-3 py-2 text-sm font-medium hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                onClick={() => setIsOpen(false)}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
+          <AuthControls mobile onAction={() => setIsOpen(false)} />
         </div>
       </nav>
     </header>
